@@ -50,6 +50,8 @@
 
   <div class="card" id="details">Загрузка…</div>
 
+  <div class="card" id="forecast" style="margin-top:16px"></div>
+
   <footer>Данные: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> (бесплатно, без ключа).</footer>
 </main>
 
@@ -87,7 +89,7 @@ async function load() {
   big.className = ""; big.textContent = "…"; det.textContent = "Загрузка…";
   try {
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
-                `&hourly=temperature_2m&past_days=5&forecast_days=1&timezone=auto`;
+                `&hourly=temperature_2m&daily=temperature_2m_mean&past_days=5&forecast_days=16&timezone=auto`;
     const r = await fetch(url);
     if (!r.ok) throw new Error("HTTP " + r.status);
     const d = await r.json();
@@ -114,9 +116,96 @@ async function load() {
     det.innerHTML = `<table><tr><th>Дата</th><th>Часов</th><th>Средняя</th></tr>${rows}
       <tr><th>Итого (${pts.length} ч)</th><th></th><th>${avg.toFixed(1)} °C</th></tr></table>
       <p class="sub" style="margin:8px 0 0">Период: ${pts[0][0].replace("T"," ")} — ${pts.at(-1)[0].replace("T"," ")} (${d.timezone})</p>`;
+
+    predict(lat, lon, d, nowLocal.slice(0,10), heat);
   } catch (e) {
     big.textContent = "?";
     det.innerHTML = `<span class="err">Ошибка загрузки: ${e.message}</span>`;
+    $("forecast").innerHTML = "";
+  }
+}
+
+// ---------- Прогноз начала отопительного сезона ----------
+// Модель «аналоговых лет»: ближайшие 16 дней берём из прогноза погоды, а дальше
+// подставляем фактические суточные температуры того же периода каждого из
+// прошлых 10 лет. Для каждого сценария ищем первый день, когда средняя за 5 суток
+// опускается ниже порога. Самый ранний сценарий — оптимистичный (тепло дадут раньше),
+// самый поздний — пессимистичный, медиана — наиболее вероятный.
+const YEARS = 10;
+const addDays = (s, n) => new Date(Date.parse(s) + n * 864e5).toISOString().slice(0,10);
+const minusYears = (s, k) => (+s.slice(0,4) - k) + s.slice(4);
+const fmtDate = s => new Date(s + "T00:00:00Z").toLocaleDateString("ru-RU", { day:"numeric", month:"long", year:"numeric", timeZone:"UTC" });
+
+// Первый день в [from, to], когда средняя за 5 суток < порога; null — не наступил; undefined — нет данных
+function firstCrossing(val, from, to) {
+  const win = [];
+  for (let s = addDays(from, -4); s <= to; s = addDays(s, 1)) {
+    const v = val(s);
+    if (v == null) return undefined;
+    win.push(v);
+    if (win.length > 5) win.shift();
+    if (s >= from && win.length === 5 && win.reduce((a,b) => a+b) / 5 < THRESHOLD) return s;
+  }
+  return null;
+}
+
+async function predict(lat, lon, d, today, heat) {
+  const box = $("forecast");
+  const y = +today.slice(0,4), m = +today.slice(5,7);
+  const seasonYear = m < 3 ? y - 1 : y;                 // год, осенью которого начинается сезон
+  const from = (m >= 3 && m < 8) ? `${y}-08-01` : today; // весной/летом считаем с 1 августа
+  const to = `${seasonYear + 1}-02-28`;
+
+  if (from === today && heat) {
+    box.innerHTML = `<h3 style="margin-top:0">Отопительный сезон</h3>
+      <p>Средняя за 5 суток уже ниже ${THRESHOLD} °C — по правилу отопление уже должно быть включено.</p>`;
+    return;
+  }
+  box.textContent = "Считаю прогноз начала отопительного сезона…";
+  try {
+    const fc = {};
+    d.daily.time.forEach((t,i) => { const v = d.daily.temperature_2m_mean[i]; if (v != null) fc[t] = v; });
+
+    const r = await fetch(`https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}` +
+      `&start_date=${y - YEARS - 1}-01-01&end_date=${addDays(today, -7)}&daily=temperature_2m_mean&timezone=auto`);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const a = await r.json();
+    const hist = {};
+    a.daily.time.forEach((t,i) => { const v = a.daily.temperature_2m_mean[i]; if (v != null) hist[t] = v; });
+    // 29 февраля в невисокосном году — берём 28-е
+    const past = (s, k) => hist[minusYears(s, k)] ?? hist[minusYears(addDays(s, -1), k)];
+
+    const scenarios = [], history = [];
+    for (let k = 1; k <= YEARS; k++) {
+      const date = firstCrossing(s => fc[s] ?? past(s, k), from, to);
+      if (date !== undefined) scenarios.push({ year: seasonYear - k, date });
+      const h = firstCrossing(s => hist[s], `${seasonYear - k}-08-01`, `${seasonYear - k + 1}-02-28`);
+      if (h !== undefined) history.push({ year: seasonYear - k, date: h });
+    }
+    if (!scenarios.length) throw new Error("нет исторических данных");
+
+    // Сценарии без перехода через порог (null) — самые поздние
+    const key = sc => sc.date ?? "9999";
+    scenarios.sort((p, q) => key(p).localeCompare(key(q)));
+    const show = sc => sc.date ? fmtDate(sc.date) : `позже ${fmtDate(to)}`;
+    const opt = scenarios[0], med = scenarios[Math.floor((scenarios.length - 1) / 2)], pes = scenarios.at(-1);
+    const fcEnd = d.daily.time.at(-1);
+    const sure = opt.date && pes.date && opt.date === pes.date && opt.date <= fcEnd;
+
+    box.innerHTML = `<h3 style="margin-top:0">Когда начнётся отопительный сезон?</h3>
+      <table>
+        <tr><td>😊 Оптимистичный (тепло раньше)</td><td>${show(opt)}</td></tr>
+        <tr><td>🎯 Наиболее вероятный</td><td><b>${show(med)}</b></td></tr>
+        <tr><td>😬 Пессимистичный (тепло позже)</td><td>${show(pes)}</td></tr>
+      </table>
+      <p class="sub" style="margin:8px 0 0">${sure
+        ? "Порог пересекается уже в пределах 16-дневного прогноза погоды — все сценарии совпадают."
+        : `Модель: 16-дневный прогноз погоды (до ${fmtDate(fcEnd)}), дальше — погода тех же дат в каждом из прошлых ${scenarios.length} лет. Дата — первый день, когда средняя за 5 суток &lt; ${THRESHOLD} °C.`}</p>
+      <details style="margin-top:8px"><summary class="sub" style="cursor:pointer">Как было в прошлые годы</summary>
+        <table>${history.map(h => `<tr><td>${h.year}</td><td>${h.date ? fmtDate(h.date) : "порог не пересечён"}</td></tr>`).join("")}</table>
+      </details>`;
+  } catch (e) {
+    box.innerHTML = `<span class="err">Не удалось построить прогноз: ${e.message}</span>`;
   }
 }
 
