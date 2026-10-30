@@ -34,51 +34,115 @@
 </head>
 <body>
 <main>
-  <h1>Иссиқлик бериладими? / Дадут тепло?</h1>
-  <p class="sub">Средняя суточная температура за последние 5 дней (120 часов). Порог — 8 °C.</p>
+  <h1 id="h1"></h1>
+  <p class="sub" id="lead"></p>
 
   <div class="row">
     <select id="city"></select>
   </div>
   <div class="row">
-    <input id="search" placeholder="Другой город (напр. Термез, Бишкек)…">
-    <button class="small" id="searchBtn">Найти</button>
+    <input id="search">
+    <button class="small" id="searchBtn"></button>
   </div>
   <div class="row" id="results"></div>
 
-  <button id="big" title="Обновить">…</button>
+  <button id="big">…</button>
 
-  <div class="card" id="details">Загрузка…</div>
+  <div class="card" id="details"></div>
 
   <div class="card" id="forecast" style="margin-top:16px"></div>
 
-  <footer>Данные: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> (бесплатно, без ключа).</footer>
+  <footer id="footer"></footer>
 </main>
 
 <script>
 const THRESHOLD = 8;
+
+// Язык: английский, если язык системы/браузера английский, иначе русский
+const EN = /^en\b/i.test(navigator.language || "");
+const T = EN ? {
+  lang: "en", locale: "en-GB",
+  title: "Heating? — 5-day average temperature",
+  h1: "Is the heating on?",
+  lead: `Average 24-hour temperature over the last 5 days (120 hours). Threshold: ${THRESHOLD} °C.`,
+  searchPh: "Another city (e.g. Termez, Bishkek)…", find: "Search", refresh: "Refresh",
+  loading: "Loading…", searching: "Searching…", notFound: "Nothing found",
+  footer: `Data: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> (free, no API key).`,
+  heatOn: "HEAT ON", freezing: "FREEZING",
+  notEnough: "Not enough data", loadErr: "Loading error", searchErr: "Search error",
+  date: "Date", hours: "Hours", avg: "Average", h: "h",
+  total: n => `Total (${n} h)`, period: "Period",
+  seasonTitle: "Heating season",
+  already: `The 5-day average is already below ${THRESHOLD} °C — by the rule, the heating should already be on.`,
+  computing: "Calculating the heating season forecast…",
+  fcTitle: "When will the heating season start?",
+  opt: "😊 Optimistic (heat sooner)", med: "🎯 Most likely", pes: "😬 Pessimistic (heat later)",
+  later: d => `after ${d}`,
+  sure: "The threshold is crossed within the 16-day weather forecast — all scenarios agree.",
+  model: (end, n) => `Model: 16-day weather forecast (until ${end}), then the weather on the same dates in each of the past ${n} years. Date = first day the 5-day average is &lt; ${THRESHOLD} °C.`,
+  history: "Past years", notCrossed: "threshold not crossed",
+  noHist: "no historical data", fcErr: "Could not build the forecast",
+} : {
+  lang: "ru", locale: "ru-RU",
+  title: "Иссиқлик? — 5-дневная средняя температура",
+  h1: "Иссиқлик бериладими? / Дадут тепло?",
+  lead: `Средняя суточная температура за последние 5 дней (120 часов). Порог — ${THRESHOLD} °C.`,
+  searchPh: "Другой город (напр. Термез, Бишкек)…", find: "Найти", refresh: "Обновить",
+  loading: "Загрузка…", searching: "Поиск…", notFound: "Ничего не найдено",
+  footer: `Данные: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> (бесплатно, без ключа).`,
+  heatOn: "ИССИҚЛИК", freezing: "МЕРЗНЕМ",
+  notEnough: "Недостаточно данных", loadErr: "Ошибка загрузки", searchErr: "Ошибка поиска",
+  date: "Дата", hours: "Часов", avg: "Средняя", h: "ч",
+  total: n => `Итого (${n} ч)`, period: "Период",
+  seasonTitle: "Отопительный сезон",
+  already: `Средняя за 5 суток уже ниже ${THRESHOLD} °C — по правилу отопление уже должно быть включено.`,
+  computing: "Считаю прогноз начала отопительного сезона…",
+  fcTitle: "Когда начнётся отопительный сезон?",
+  opt: "😊 Оптимистичный (тепло раньше)", med: "🎯 Наиболее вероятный", pes: "😬 Пессимистичный (тепло позже)",
+  later: d => `позже ${d}`,
+  sure: "Порог пересекается уже в пределах 16-дневного прогноза погоды — все сценарии совпадают.",
+  model: (end, n) => `Модель: 16-дневный прогноз погоды (до ${end}), дальше — погода тех же дат в каждом из прошлых ${n} лет. Дата — первый день, когда средняя за 5 суток &lt; ${THRESHOLD} °C.`,
+  history: "Как было в прошлые годы", notCrossed: "порог не пересечён",
+  noHist: "нет исторических данных", fcErr: "Не удалось построить прогноз",
+};
+
 const CITIES = [
   // Узбекистан
-  ["Ташкент",41.2995,69.2401],["Самарканд",39.6542,66.9597],["Бухара",39.7681,64.4556],["Наманган",40.9983,71.6726],
-  ["Андижан",40.7821,72.3442],["Фергана",40.3864,71.7864],["Нукус",42.4531,59.6103],["Карши",38.8606,65.7891],
-  ["Термез",37.2242,67.2783],["Ургенч",41.5500,60.6333],["Джизак",40.1158,67.8422],["Навои",40.0844,65.3792],
-  ["Гулистан",40.4897,68.7842],["Хива",41.3783,60.3639],
+  ["Ташкент","Tashkent",41.2995,69.2401],["Самарканд","Samarkand",39.6542,66.9597],["Бухара","Bukhara",39.7681,64.4556],
+  ["Наманган","Namangan",40.9983,71.6726],["Андижан","Andijan",40.7821,72.3442],["Фергана","Fergana",40.3864,71.7864],
+  ["Нукус","Nukus",42.4531,59.6103],["Карши","Karshi",38.8606,65.7891],["Термез","Termez",37.2242,67.2783],
+  ["Ургенч","Urgench",41.5500,60.6333],["Джизак","Jizzakh",40.1158,67.8422],["Навои","Navoi",40.0844,65.3792],
+  ["Гулистан","Gulistan",40.4897,68.7842],["Хива","Khiva",41.3783,60.3639],
   // СНГ
-  ["Москва",55.7558,37.6173],["Санкт-Петербург",59.9343,30.3351],["Алматы",43.2220,76.8512],["Астана",51.1694,71.4491],
-  ["Бишкек",42.8746,74.5698],["Душанбе",38.5598,68.7870],["Ашхабад",37.9601,58.3261],["Баку",40.4093,49.8671],
-  ["Ереван",40.1792,44.4991],["Минск",53.9006,27.5590],["Кишинёв",47.0105,28.8638],["Новосибирск",55.0084,82.9357],
+  ["Москва","Moscow",55.7558,37.6173],["Санкт-Петербург","Saint Petersburg",59.9343,30.3351],["Алматы","Almaty",43.2220,76.8512],
+  ["Астана","Astana",51.1694,71.4491],["Бишкек","Bishkek",42.8746,74.5698],["Душанбе","Dushanbe",38.5598,68.7870],
+  ["Ашхабад","Ashgabat",37.9601,58.3261],["Баку","Baku",40.4093,49.8671],["Ереван","Yerevan",40.1792,44.4991],
+  ["Минск","Minsk",53.9006,27.5590],["Кишинёв","Chisinau",47.0105,28.8638],["Новосибирск","Novosibirsk",55.0084,82.9357],
 ];
 
 const $ = id => document.getElementById(id);
+document.documentElement.lang = T.lang;
+document.title = T.title;
+$("h1").textContent = T.h1;
+$("lead").textContent = T.lead;
+$("search").placeholder = T.searchPh;
+$("searchBtn").textContent = T.find;
+$("big").title = T.refresh;
+$("details").textContent = T.loading;
+$("footer").innerHTML = T.footer;
+
 const sel = $("city");
-CITIES.forEach(([n,la,lo],i) => sel.add(new Option(n, `${la},${lo},${n}`)));
+CITIES.forEach(([ru,en,la,lo]) => { const n = EN ? en : ru; sel.add(new Option(n, `${la},${lo},${n}`)); });
 
 function saved() { try { return localStorage.getItem("city"); } catch { return null; } }
 function save(v) { try { localStorage.setItem("city", v); } catch {} }
 
 function addCustom(name, lat, lon) {
   const v = `${lat},${lon},${name}`;
-  if (![...sel.options].some(o => o.value === v)) sel.add(new Option(name, v));
+  // Тот же город из списка (по координатам) — выбираем его, чтобы название было на текущем языке
+  const same = [...sel.options].find(o => o.value.startsWith(`${lat},${lon},`));
+  if (same) { sel.value = same.value; return; }
+  sel.add(new Option(name, v));
   sel.value = v;
 }
 
@@ -86,7 +150,7 @@ async function load() {
   const [lat, lon, name] = sel.value.split(",");
   save(sel.value);
   const big = $("big"), det = $("details");
-  big.className = ""; big.textContent = "…"; det.textContent = "Загрузка…";
+  big.className = ""; big.textContent = "…"; det.textContent = T.loading;
   try {
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
                 `&hourly=temperature_2m&daily=temperature_2m_mean&past_days=5&forecast_days=16&timezone=auto`;
@@ -99,28 +163,28 @@ async function load() {
     const pts = d.hourly.time.map((t,i) => [t, d.hourly.temperature_2m[i]])
                  .filter(([t,v]) => t <= nowLocal && v != null)
                  .slice(-120);
-    if (pts.length < 24) throw new Error("Недостаточно данных");
+    if (pts.length < 24) throw new Error(T.notEnough);
 
     const avg = pts.reduce((s,[,v]) => s+v, 0) / pts.length;
     const heat = avg < THRESHOLD;
 
     big.className = heat ? "warm" : "cold";
-    big.innerHTML = (heat ? "ИССИҚЛИК" : "МЕРЗНЕМ") +
+    big.innerHTML = (heat ? T.heatOn : T.freezing) +
       `<small>${name}: ${avg.toFixed(1)} °C ${heat ? "<" : "≥"} ${THRESHOLD} °C</small>`;
 
     // Разбивка по суткам
     const days = {};
     pts.forEach(([t,v]) => (days[t.slice(0,10)] ??= []).push(v));
     const rows = Object.entries(days).map(([day, vs]) =>
-      `<tr><td>${day}</td><td>${vs.length} ч</td><td>${(vs.reduce((a,b)=>a+b,0)/vs.length).toFixed(1)} °C</td></tr>`).join("");
-    det.innerHTML = `<table><tr><th>Дата</th><th>Часов</th><th>Средняя</th></tr>${rows}
-      <tr><th>Итого (${pts.length} ч)</th><th></th><th>${avg.toFixed(1)} °C</th></tr></table>
-      <p class="sub" style="margin:8px 0 0">Период: ${pts[0][0].replace("T"," ")} — ${pts.at(-1)[0].replace("T"," ")} (${d.timezone})</p>`;
+      `<tr><td>${day}</td><td>${vs.length} ${T.h}</td><td>${(vs.reduce((a,b)=>a+b,0)/vs.length).toFixed(1)} °C</td></tr>`).join("");
+    det.innerHTML = `<table><tr><th>${T.date}</th><th>${T.hours}</th><th>${T.avg}</th></tr>${rows}
+      <tr><th>${T.total(pts.length)}</th><th></th><th>${avg.toFixed(1)} °C</th></tr></table>
+      <p class="sub" style="margin:8px 0 0">${T.period}: ${pts[0][0].replace("T"," ")} — ${pts.at(-1)[0].replace("T"," ")} (${d.timezone})</p>`;
 
     predict(lat, lon, d, nowLocal.slice(0,10), heat);
   } catch (e) {
     big.textContent = "?";
-    det.innerHTML = `<span class="err">Ошибка загрузки: ${e.message}</span>`;
+    det.innerHTML = `<span class="err">${T.loadErr}: ${e.message}</span>`;
     $("forecast").innerHTML = "";
   }
 }
@@ -134,7 +198,7 @@ async function load() {
 const YEARS = 10;
 const addDays = (s, n) => new Date(Date.parse(s) + n * 864e5).toISOString().slice(0,10);
 const minusYears = (s, k) => (+s.slice(0,4) - k) + s.slice(4);
-const fmtDate = s => new Date(s + "T00:00:00Z").toLocaleDateString("ru-RU", { day:"numeric", month:"long", year:"numeric", timeZone:"UTC" });
+const fmtDate = s => new Date(s + "T00:00:00Z").toLocaleDateString(T.locale, { day:"numeric", month:"long", year:"numeric", timeZone:"UTC" });
 
 // Первый день в [from, to], когда средняя за 5 суток < порога; null — не наступил; undefined — нет данных
 function firstCrossing(val, from, to) {
@@ -157,11 +221,10 @@ async function predict(lat, lon, d, today, heat) {
   const to = `${seasonYear + 1}-02-28`;
 
   if (from === today && heat) {
-    box.innerHTML = `<h3 style="margin-top:0">Отопительный сезон</h3>
-      <p>Средняя за 5 суток уже ниже ${THRESHOLD} °C — по правилу отопление уже должно быть включено.</p>`;
+    box.innerHTML = `<h3 style="margin-top:0">${T.seasonTitle}</h3><p>${T.already}</p>`;
     return;
   }
-  box.textContent = "Считаю прогноз начала отопительного сезона…";
+  box.textContent = T.computing;
   try {
     const fc = {};
     d.daily.time.forEach((t,i) => { const v = d.daily.temperature_2m_mean[i]; if (v != null) fc[t] = v; });
@@ -182,42 +245,40 @@ async function predict(lat, lon, d, today, heat) {
       const h = firstCrossing(s => hist[s], `${seasonYear - k}-08-01`, `${seasonYear - k + 1}-02-28`);
       if (h !== undefined) history.push({ year: seasonYear - k, date: h });
     }
-    if (!scenarios.length) throw new Error("нет исторических данных");
+    if (!scenarios.length) throw new Error(T.noHist);
 
     // Сценарии без перехода через порог (null) — самые поздние
     const key = sc => sc.date ?? "9999";
     scenarios.sort((p, q) => key(p).localeCompare(key(q)));
-    const show = sc => sc.date ? fmtDate(sc.date) : `позже ${fmtDate(to)}`;
+    const show = sc => sc.date ? fmtDate(sc.date) : T.later(fmtDate(to));
     const opt = scenarios[0], med = scenarios[Math.floor((scenarios.length - 1) / 2)], pes = scenarios.at(-1);
     const fcEnd = d.daily.time.at(-1);
     const sure = opt.date && pes.date && opt.date === pes.date && opt.date <= fcEnd;
 
-    box.innerHTML = `<h3 style="margin-top:0">Когда начнётся отопительный сезон?</h3>
+    box.innerHTML = `<h3 style="margin-top:0">${T.fcTitle}</h3>
       <table>
-        <tr><td>😊 Оптимистичный (тепло раньше)</td><td>${show(opt)}</td></tr>
-        <tr><td>🎯 Наиболее вероятный</td><td><b>${show(med)}</b></td></tr>
-        <tr><td>😬 Пессимистичный (тепло позже)</td><td>${show(pes)}</td></tr>
+        <tr><td>${T.opt}</td><td>${show(opt)}</td></tr>
+        <tr><td>${T.med}</td><td><b>${show(med)}</b></td></tr>
+        <tr><td>${T.pes}</td><td>${show(pes)}</td></tr>
       </table>
-      <p class="sub" style="margin:8px 0 0">${sure
-        ? "Порог пересекается уже в пределах 16-дневного прогноза погоды — все сценарии совпадают."
-        : `Модель: 16-дневный прогноз погоды (до ${fmtDate(fcEnd)}), дальше — погода тех же дат в каждом из прошлых ${scenarios.length} лет. Дата — первый день, когда средняя за 5 суток &lt; ${THRESHOLD} °C.`}</p>
-      <details style="margin-top:8px"><summary class="sub" style="cursor:pointer">Как было в прошлые годы</summary>
-        <table>${history.map(h => `<tr><td>${h.year}</td><td>${h.date ? fmtDate(h.date) : "порог не пересечён"}</td></tr>`).join("")}</table>
+      <p class="sub" style="margin:8px 0 0">${sure ? T.sure : T.model(fmtDate(fcEnd), scenarios.length)}</p>
+      <details style="margin-top:8px"><summary class="sub" style="cursor:pointer">${T.history}</summary>
+        <table>${history.map(h => `<tr><td>${h.year}</td><td>${h.date ? fmtDate(h.date) : T.notCrossed}</td></tr>`).join("")}</table>
       </details>`;
   } catch (e) {
-    box.innerHTML = `<span class="err">Не удалось построить прогноз: ${e.message}</span>`;
+    box.innerHTML = `<span class="err">${T.fcErr}: ${e.message}</span>`;
   }
 }
 
 async function search() {
   const q = $("search").value.trim(), box = $("results");
   if (!q) return;
-  box.textContent = "Поиск…";
+  box.textContent = T.searching;
   try {
-    const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=8&language=ru`);
+    const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=8&language=${T.lang}`);
     const d = await r.json();
     box.innerHTML = "";
-    if (!d.results?.length) { box.textContent = "Ничего не найдено"; return; }
+    if (!d.results?.length) { box.textContent = T.notFound; return; }
     d.results.forEach(c => {
       const b = document.createElement("button");
       b.className = "small";
@@ -225,7 +286,7 @@ async function search() {
       b.onclick = () => { addCustom(c.name, c.latitude, c.longitude); box.innerHTML = ""; load(); };
       box.append(b);
     });
-  } catch (e) { box.innerHTML = `<span class="err">Ошибка поиска: ${e.message}</span>`; }
+  } catch (e) { box.innerHTML = `<span class="err">${T.searchErr}: ${e.message}</span>`; }
 }
 
 const s = saved();
