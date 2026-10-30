@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Иссиқлик? — 5-дневная средняя температура</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --text:#e2e8f0; --muted:#94a3b8; --warm:#ea580c; --cold:#2563eb; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text);
+         min-height:100vh; display:flex; justify-content:center; padding:24px 16px; }
+  main { width:100%; max-width:640px; }
+  h1 { font-size:1.4rem; margin:0 0 4px; }
+  p.sub { color:var(--muted); margin:0 0 20px; font-size:.95rem; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+  select, input, button.small { font:inherit; padding:10px 12px; border-radius:8px; border:1px solid #334155; background:var(--card); color:var(--text); }
+  select { flex:1 1 220px; } input { flex:1 1 200px; }
+  button.small { cursor:pointer; }
+  #big { display:block; width:100%; margin:24px 0; padding:48px 16px; border:none; border-radius:24px; cursor:pointer;
+         font-size:clamp(2.5rem,12vw,5rem); font-weight:900; letter-spacing:.05em; color:#fff; background:#475569;
+         box-shadow:0 10px 30px rgba(0,0,0,.4); transition:background .3s, transform .1s; }
+  #big:active { transform:scale(.98); }
+  #big.warm { background:linear-gradient(135deg,#f97316,#dc2626); }
+  #big.cold { background:linear-gradient(135deg,#38bdf8,#1d4ed8); }
+  #big small { display:block; font-size:1rem; font-weight:500; letter-spacing:0; opacity:.9; margin-top:8px; }
+  .card { background:var(--card); border-radius:12px; padding:16px; }
+  table { width:100%; border-collapse:collapse; font-size:.95rem; }
+  td, th { padding:6px 4px; text-align:left; border-bottom:1px solid #334155; }
+  td:last-child, th:last-child { text-align:right; }
+  .err { color:#f87171; }
+  footer { color:var(--muted); font-size:.8rem; margin-top:16px; }
+  a { color:#7dd3fc; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Иссиқлик бериладими? / Дадут тепло?</h1>
+  <p class="sub">Средняя суточная температура за последние 5 дней (120 часов). Порог — 8 °C.</p>
+
+  <div class="row">
+    <select id="city"></select>
+  </div>
+  <div class="row">
+    <input id="search" placeholder="Другой город (напр. Термез, Бишкек)…">
+    <button class="small" id="searchBtn">Найти</button>
+  </div>
+  <div class="row" id="results"></div>
+
+  <button id="big" title="Обновить">…</button>
+
+  <div class="card" id="details">Загрузка…</div>
+
+  <footer>Данные: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> (бесплатно, без ключа).</footer>
+</main>
+
+<script>
+const THRESHOLD = 8;
+const CITIES = [
+  // Узбекистан
+  ["Ташкент",41.2995,69.2401],["Самарканд",39.6542,66.9597],["Бухара",39.7681,64.4556],["Наманган",40.9983,71.6726],
+  ["Андижан",40.7821,72.3442],["Фергана",40.3864,71.7864],["Нукус",42.4531,59.6103],["Карши",38.8606,65.7891],
+  ["Термез",37.2242,67.2783],["Ургенч",41.5500,60.6333],["Джизак",40.1158,67.8422],["Навои",40.0844,65.3792],
+  ["Гулистан",40.4897,68.7842],["Хива",41.3783,60.3639],
+  // СНГ
+  ["Москва",55.7558,37.6173],["Санкт-Петербург",59.9343,30.3351],["Алматы",43.2220,76.8512],["Астана",51.1694,71.4491],
+  ["Бишкек",42.8746,74.5698],["Душанбе",38.5598,68.7870],["Ашхабад",37.9601,58.3261],["Баку",40.4093,49.8671],
+  ["Ереван",40.1792,44.4991],["Минск",53.9006,27.5590],["Кишинёв",47.0105,28.8638],["Новосибирск",55.0084,82.9357],
+];
+
+const $ = id => document.getElementById(id);
+const sel = $("city");
+CITIES.forEach(([n,la,lo],i) => sel.add(new Option(n, `${la},${lo},${n}`)));
+
+function saved() { try { return localStorage.getItem("city"); } catch { return null; } }
+function save(v) { try { localStorage.setItem("city", v); } catch {} }
+
+function addCustom(name, lat, lon) {
+  const v = `${lat},${lon},${name}`;
+  if (![...sel.options].some(o => o.value === v)) sel.add(new Option(name, v));
+  sel.value = v;
+}
+
+async function load() {
+  const [lat, lon, name] = sel.value.split(",");
+  save(sel.value);
+  const big = $("big"), det = $("details");
+  big.className = ""; big.textContent = "…"; det.textContent = "Загрузка…";
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+                `&hourly=temperature_2m&past_days=5&forecast_days=1&timezone=auto`;
+    const r = await fetch(url);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const d = await r.json();
+
+    // Текущее местное время города (в формате API: YYYY-MM-DDTHH:MM)
+    const nowLocal = new Date(Date.now() + d.utc_offset_seconds * 1000).toISOString().slice(0,16);
+    const pts = d.hourly.time.map((t,i) => [t, d.hourly.temperature_2m[i]])
+                 .filter(([t,v]) => t <= nowLocal && v != null)
+                 .slice(-120);
+    if (pts.length < 24) throw new Error("Недостаточно данных");
+
+    const avg = pts.reduce((s,[,v]) => s+v, 0) / pts.length;
+    const heat = avg < THRESHOLD;
+
+    big.className = heat ? "warm" : "cold";
+    big.innerHTML = (heat ? "ИССИҚЛИК" : "МЕРЗНЕМ") +
+      `<small>${name}: ${avg.toFixed(1)} °C ${heat ? "<" : "≥"} ${THRESHOLD} °C</small>`;
+
+    // Разбивка по суткам
+    const days = {};
+    pts.forEach(([t,v]) => (days[t.slice(0,10)] ??= []).push(v));
+    const rows = Object.entries(days).map(([day, vs]) =>
+      `<tr><td>${day}</td><td>${vs.length} ч</td><td>${(vs.reduce((a,b)=>a+b,0)/vs.length).toFixed(1)} °C</td></tr>`).join("");
+    det.innerHTML = `<table><tr><th>Дата</th><th>Часов</th><th>Средняя</th></tr>${rows}
+      <tr><th>Итого (${pts.length} ч)</th><th></th><th>${avg.toFixed(1)} °C</th></tr></table>
+      <p class="sub" style="margin:8px 0 0">Период: ${pts[0][0].replace("T"," ")} — ${pts.at(-1)[0].replace("T"," ")} (${d.timezone})</p>`;
+  } catch (e) {
+    big.textContent = "?";
+    det.innerHTML = `<span class="err">Ошибка загрузки: ${e.message}</span>`;
+  }
+}
+
+async function search() {
+  const q = $("search").value.trim(), box = $("results");
+  if (!q) return;
+  box.textContent = "Поиск…";
+  try {
+    const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=8&language=ru`);
+    const d = await r.json();
+    box.innerHTML = "";
+    if (!d.results?.length) { box.textContent = "Ничего не найдено"; return; }
+    d.results.forEach(c => {
+      const b = document.createElement("button");
+      b.className = "small";
+      b.textContent = `${c.name}${c.admin1 ? ", " + c.admin1 : ""}${c.country ? ", " + c.country : ""}`;
+      b.onclick = () => { addCustom(c.name, c.latitude, c.longitude); box.innerHTML = ""; load(); };
+      box.append(b);
+    });
+  } catch (e) { box.innerHTML = `<span class="err">Ошибка поиска: ${e.message}</span>`; }
+}
+
+const s = saved();
+if (s) { const [la,lo,...n] = s.split(","); addCustom(n.join(","), la, lo); }
+sel.onchange = load;
+$("big").onclick = load;
+$("searchBtn").onclick = search;
+$("search").onkeydown = e => { if (e.key === "Enter") search(); };
+load();
+</script>
+</body>
+</html>
